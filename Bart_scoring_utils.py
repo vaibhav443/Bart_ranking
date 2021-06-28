@@ -2,14 +2,14 @@ from warnings import simplefilter
 
 # ignore all future warnings
 simplefilter(action='ignore', category=FutureWarning)
-import spacy
 import unidecode
-import string
 import nltk
 import re
 from nltk.corpus import stopwords
 import pandas as pd
 import operator
+import json
+import requests
 
 nltk.download('stopwords')
 stop = stopwords.words('english')
@@ -21,70 +21,25 @@ def remove_accented_chars(text):
     return text
 
 
-def basic_preprocessing_exact(Df):
-    # removing accented characters
-    """
-
-    :param Df: data for exact match
-    :return: preprossed data for exact match
-    """
-    df = pd.DataFrame(Df, copy=True)
-    df['description_eng'] = df['description_eng'].apply(remove_accented_chars)
-    df['title_eng'] = df['title_eng'].apply(remove_accented_chars)
-
-    # removing digits and converting into lower case
-    df['description_eng'] = df['description_eng'].str.lower().str.replace('\d+', '')
-    df['title_eng'] = df['title_eng'].str.lower().str.replace('\d+', '')
-
-    # removing extrawhite spacing
-    df['description_eng'] = df['description_eng'].str.replace('\s\s+', ' ')
-    df['title_eng'] = df['title_eng'].str.replace('\s\s+', ' ')
-
-    # removing punctuations
-    df['description_eng'] = df['description_eng'].str.replace('[^\w\s]', '')
-    df['title_eng'] = df['title_eng'].str.replace('[^\w\s]', '')
-
-    # removing stopwords
-    df['description_eng'] = df['description_eng'].apply(
-        lambda x: ' '.join([word for word in x.split() if word not in (stop)]))
-    df['title_eng'] = df['title_eng'].apply(lambda x: ' '.join([word for word in x.split() if word not in (stop)]))
-
-    return df
-
-
 def basic_preprocessing_ST(Df):
     """
 
     :param Df: data
-    :return: preprossed data for semantic match
+    :return: preprocessed data for semantic match
     """
     df = pd.DataFrame(Df, copy=True)
-    df['description_eng'] = df['description_eng'].apply(remove_accented_chars)
-    df['title_eng'] = df['title_eng'].apply(remove_accented_chars)
+    df['description'] = df['description'].apply(remove_accented_chars)
+    df['title'] = df['title'].apply(remove_accented_chars)
 
-    df['description_eng'] = df['description_eng'].str.lower().str.replace('\d+', '')
-    df['title_eng'] = df['title_eng'].str.lower().str.replace('\d+', '')
+    # removing digits and converting into lower case
+    df['description'] = df['description'].str.lower().str.replace('\d+', '')
+    df['title'] = df['title'].str.lower().str.replace('\d+', '')
 
-    df['description_eng'] = df['description_eng'].str.replace('\s\s+', ' ')
-    df['title_eng'] = df['title_eng'].str.replace('\s\s+', ' ')
+    # removing extrawhite spacing
+    df['description'] = df['description'].str.replace('\s\s+', ' ')
+    df['title'] = df['title'].str.replace('\s\s+', ' ')
 
     return df
-
-def basic_preprocessing_keyword_exact(keywords):
-
-    """
-
-    :param keywords: keywords list
-    :return: preprossed keywords for exact match
-    """
-    for i in range(len(keywords)):
-        keywords[i] = remove_accented_chars(keywords[i])
-        keywords[i] = keywords[i].lower()
-        keywords[i] = re.sub(r'\d+', '', keywords[i])
-        keywords[i] = re.sub(r'\s\s+', ' ', keywords[i])
-        keywords[i] = re.sub(r'[^\w\s]', '', keywords[i])
-        keywords[i] = ' '.join([word for word in keywords[i].split() if word not in (stop)])
-    return keywords
 
 
 def basic_preprocessing_keywords_ST(keywords):
@@ -102,26 +57,22 @@ def basic_preprocessing_keywords_ST(keywords):
     return keywords
 
 
-from transformers import pipeline
-classifier = pipeline("zero-shot-classification",
-                      model="facebook/bart-large-mnli")
-def bart_scores(data, keyword):
-    title_text = []
-    description_text = []
-    for i in data.index:
-        title_text.append(data['title_eng'][i])
-        description_text.append(data['description_eng'][i])
-    dict_bart_title = {}
-    i = 0
-    for text in title_text:
-        dict_bart_title[i] = classifier(text, keyword)['scores'][0]
-        i = i + 1
-    j = 0
-    dict_bart_descrip = {}
-    for text in description_text:
-        dict_bart_descrip[j] = classifier(text, keyword)['scores'][0]
-        j = j + 1
+# from transformers import pipeline
+# classifier = pipeline("zero-shot-classification",
+#                         model="facebook/bart-large-mnli")
+def bart_scores(data, keyword, lang):
+    """
 
+    :param data: preprocessed data
+    :param keyword: preprocessed keyword
+    :param lang: language (en,fr etc...)
+    :return: dict of bart_scores for keyword with respect to each product
+    """
+    title_text = [data['title'][i] for i in data.index]
+    description_text = [data['description'][i] for i in data.index]
+    dict_bart_title = {i: bart_service(title_text[i], lang, keyword)['scores'][0] for i in range(len(title_text))}
+    dict_bart_descrip = {i: bart_service(description_text[i], lang, keyword)['scores'][0] for i in
+                         range(len(description_text))}
     dict_bart = {}
     for i in range(data.shape[0]):
         dict_bart[i] = (dict_bart_title[i]) * 60 + (dict_bart_descrip[i] * 40)
@@ -130,7 +81,13 @@ def bart_scores(data, keyword):
 
 
 def bart_result(Dict_bart, N_prod, Df):
+    """
 
+    :param Dict_bart: dict of bart scores
+    :param N_prod: No. of products to be ranked
+    :param Df: product dataset
+    :return: top n ranked products
+    """
     sorted_dict = dict(sorted(Dict_bart.items(), key=operator.itemgetter(1), reverse=True))
     dict_items = sorted_dict.items()
     top_n_prods = list(dict_items)[:N_prod]
@@ -148,3 +105,29 @@ def bart_result(Dict_bart, N_prod, Df):
     results1['brand'] = brand
 
     return results1
+
+
+def bart_service(text, lang, keyword):
+    """
+
+    :param text: piece of text
+    :param lang: language(en,fr etc...)
+    :param keyword: keyword for which bart score is to be calculated
+    :return: scores for keyword with respect to text
+    """
+    bart_endpoint = 'http://35.180.247.177:8001/bart'
+
+    params = {
+        'text': text,
+        'keyword': [keyword],
+        'lang': lang
+    }
+    params = json.dumps(params)
+
+    query_emb = requests.post(bart_endpoint, data=params)
+    if query_emb.ok:
+        query_emb = query_emb.json()
+    else:
+        raise ValueError(query_emb.text)
+
+    return query_emb

@@ -20,7 +20,7 @@ def product_rank_bart(prod_params):
         results = bart_result(dict_bart, prod_params.get("N_prod", 3), Df)
         # print(results)
         dict_res["kwd_value"] = prod_params.get("kwds")[index]
-        dict_res["top_n_results"] = [results[['score', 'title', 'description']].to_dict()]
+        dict_res["top_n_results"] = results[['score', 'title', 'description', 'brand']].to_dict()
 
         list_res.append(dict_res)
 

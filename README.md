@@ -39,6 +39,7 @@ prod_params = {
 }
 ```
 data_dict is a dictionary containing title, description, brand and price of products.
+
 sample format of data_dict-
 ```python
 {
